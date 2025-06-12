@@ -1,0 +1,620 @@
+1. Codec VHDL Code:
+library ieee;
+use ieee.std_logic_1164.all;
+entity codec_init is
+port
+(
+CLOCK_50 : in std_logic; -- master clock
+RES_N : in std_logic; -- reset, active 0
+SCLK : out std_logic; -- serial clock
+SDIN : out std_logic -- serial data
+);
+end entity;
+architecture rtl of codec_init is
+constant sdin_load : std_logic_vector (11*24-1 downto 0) :=
+b"0011010_0_0001111_000000000"&
+b"0011010_0_0000000_000011111"&
+b"0011010_0_0000001_000110111"&
+b"0011010_0_0000010_001111001"&
+b"0011010_0_0000011_000110000"&
+b"0011010_0_0000100_011010010"&
+b"0011010_0_0000101_000000001"&
+b"0011010_0_0000110_001100010"&
+b"0011010_0_0000111_001000011"&
+b"0011010_0_0001000_000100000"&
+b"0011010_0_0001001_000000001";
+-- 11 words, the first is reset (R15), the others are registers R0-9.
+-- each word is 24 bit constructed as
+-- chip address, r/w bit, reg address, reg data
+-- these words do not include start, stop and ack bits, see packet format below
+-- Packet format: (bit number)
+---- start bit 28
+-- 7 bits chip address,
+-- 1 r/w bit,
+--** ack 19
+-- 8 high bits of reg. data,
+--** ack 10
+-- 8 low bits of reg. data,
+--** ack 1
+---- stop bit 0
+-- reg. data = 7 bit address + 9 bit config data, 16 bits total,
+-- split as 8+8 bits in the packet, MSB go first.
+-- declare a shift register
+signal sr: std_logic_vector(11*24-1 downto 0);
+-- declare an internal signal to be copied into SIDN
+-- declare the bit counter; -- bit counter, runs at 100kHz,
+signal bit_cnt: integer range 0 to 28 := 28;
+-- bits 28, 19, 10, 1 and 0 are special
+-- declare the word counter; -- word counter, runs at about 5kHz
+signal word_cnt: integer range 0 to 10 := 10;
+-- declare the counter for the bit length; -- frequency divider counter,
+-- runs at 50MHz
+signal f_div_cnt: integer range 0 to 499 := 499;
+signal s_sdin: std_logic;
+signal s_sclk: std_logic;
+begin
+process (CLOCK_50)
+begin
+if (rising_edge(CLOCK_50)) then
+-----------------------------
+-- reset actions
+if (RES_N = '0') then
+-- reset the counters to an appropriate state
+-- load the frequency divider,
+-- 50MHz/500=100kHz bus speed
+-- load the shift register
+-- load the bit counter,
+-- 29 bits in the word protocol
+-- load the word counter, 11 words
+-- reset the outputs to an appropriate state
+f_div_cnt <= 499;
+bit_cnt <= 28;
+word_cnt <= 10;
+sr <= sdin_load;
+s_sclk <= '0';
+s_sdin <= '1';
+elsif (f_div_cnt = 0 and bit_cnt = 0 and word_cnt = 0) then -- deadlock
+in the end
+28
+-- do nothing, wait for the next reset
+s_sdin <= 'Z';
+s_Sclk <= 'Z';
+-- modify reference counters
+-- for frequency divider, bits and words
+elsif (f_div_cnt = 0) then -- at the end of each bit
+f_div_cnt <= 499; -- reload the frequency divider counter
+if (bit_cnt = 0) then -- at the end of each word
+bit_cnt <= 28; -- reset the bit counter
+word_cnt <= word_cnt-1; --modify the word counter
+-- the bit is not the end of a word
+bit_cnt <= bit_cnt-1; --modify the bit counter
+else end if;
+-- if not the end of the bit
+f_div_cnt <= f_div_cnt-1; -- modify the frequency divider
+SCLK goes up
+f_div_cnt < 500)) then else end if;
+-- generating SCLK, it is going up and then down inside each bit
+if (f_div_cnt < 375 and f_div_cnt > 124) then -- condition when
+s_sclk <= '1';
+elsif ((f_div_cnt >= 0 and f_div_cnt < 125) or (f_div_cnt > 374 and
+-- condition when SCLK goes down
+s_sclk <= '0';
+end if;
+-- generating serial data output
+if (f_div_cnt = 250 and bit_cnt = 28) then -- start transition condition
+s_sdin <= '0';
+elsif (bit_cnt = 19 or bit_cnt = 10 or bit_cnt = 1) then -- ack bit
+condition
+s_sdin <= 'Z';
+elsif (bit_cnt = 0 and f_div_cnt=499) then -- stop transition condition
+s_sdin <= '0';
+elsif (bit_cnt = 0 and f_div_cnt=250) then -- stop transition condition
+s_sdin <= '1';
+elsif(bit_cnt /= 19 and bit_cnt /= 10 and bit_cnt /= 1 and bit_cnt /= 0
+and bit_cnt /= 28 and f_div_cnt = 499) then -- condition for the non-special bits
+s_sdin <= sr(263);
+sr((263) downto 1) <= sr(262 downto 0); -- shifting
+end if;
+-----------------------------
+end if;
+end process;
+SDIN <= s_sdin;
+SCLK <= s_sclk;
+-- forming the output with high impedance states for ack-s
+--SDIN <= 'Z' when (...condition for ack bits...)
+-- else (sdout);
+end rtl;
+2. Codec Test Bench:
+LIBRARY ieee;
+USE ieee.std_logic_1164.all;
+ENTITY codec_vhd_tst IS
+END codec_vhd_tst;
+ARCHITECTURE codec_arch OF codec_vhd_tst IS
+-- constants
+-- signals
+SIGNAL CLOCK_50 : STD_LOGIC;
+SIGNAL RES_N : STD_LOGIC;
+SIGNAL SCLK : STD_LOGIC;
+SIGNAL SDIN : STD_LOGIC;
+COMPONENT codec_init
+PORT (
+CLOCK_50 : IN STD_LOGIC;
+RES_N : IN STD_LOGIC;
+SCLK : OUT STD_LOGIC;
+SDIN : OUT STD_LOGIC
+);
+END COMPONENT;
+BEGIN
+i1 : codec_init
+PORT MAP (
+-- list connections between master ports and signals
+CLOCK_50 => CLOCK_50,
+RES_N => RES_N,
+SCLK => SCLK,
+SDIN => SDIN
+);
+clk_proc : PROCESS
+variable i : integer;
+BEGIN -- code that executes only once
+for i in 1 to 12*29*500 loop -- specify here the length of the simulation run
+CLOCK_50 <= '0';
+wait for 10 ns;
+CLOCK_50 <= '1';
+wait for 10 ns;
+end loop;
+30
+WAIT;
+END PROCESS;
+stim : PROCESS
+BEGIN
+RES_N <= '0';
+wait for 40 ns;
+RES_N <= '1';
+WAIT;
+END PROCESS;
+END codec_arch;
+3. S2P Adapter VHDL code:
+library ieee;
+use ieee.std_logic_1164.all;
+use ieee.numeric_std.all;
+entity s2p_adaptor is
+port(
+-- Core Side - two parallel interfaces for input and output
+ADCDAT: out std_logic_vector(15 downto 0);
+DACDAT: in std_logic_vector(15 downto 0);
+DACrdy: out std_logic;
+ADCrdy: in std_logic;
+DACstb: in std_logic;
+ADCstb: out std_logic;
+-- Audio Side in MASTER mode
+AUD_DACDAT: out std_logic; -- serial data out
+AUD_ADCDAT: in std_logic; -- serial data in
+AUD_ADCLRCK: in std_logic; -- strobe for input
+AUD_DACLRCK: in std_logic; -- strobe for output
+AUD_BCLK: in std_logic; -- serial interface "clock"
+-- Control Signals
+CLOCK_50: in std_logic;
+RST_N: in std_logic
+);
+end entity;
+architecture rtl of s2p_adaptor is
+-- Internal Signals
+signal old_BCLK: std_logic;
+--signal old_dacstb: std_logic;
+signal bit_cnt: integer range -1 to 16;
+signal bit_cnt_s: integer range -1 to 16;
+--signal DACrdy_int: std_logic;
+signal ADCstb_int: std_logic;
+signal DACDAT_int: std_logic_vector(15 downto 0);
+begin
+process (CLOCK_50)
+--variable enable_o: integer;
+begin
+if (rising_edge(CLOCK_50)) then
+-------------begin sync design----------------
+-- reset actions (synchronous)
+if (RST_N = '0') then
+ADCstb_int <= '0';
+bit_cnt <= -1;
+bit_cnt_s <= -1;
+DACDAT_int <= b"0000000000000000";
+--DACrdy_int <= '0';
+else
+old_BCLK <= AUD_BCLK; -- needed for change detection
+on BCLK input
+-- input channel
+of AUD_BCLK
+start of the protocol
+the first bit og the packet
+bits of the left channel
+input one bit
+counter
+--old_dacstb <= DACstb;
+if (old_BCLK='0' and AUD_BCLK='1') then --rising edge
+if (AUD_ADCLRCK = '1') then -- condition for the
+bit_cnt <= 14; -- load the bit counter
+ADCDAT(15) <= AUD_ADCDAT; -- read
+elsif (bit_cnt >= 0) then -- condition for the data
+ADCDAT(bit_cnt) <= AUD_ADCDAT;--
+bit_cnt <= bit_cnt - 1; -- advance the bit
+of ADC parallel interface
+end if;
+if (bit_cnt = 0) then ADCstb_int <= '1';
+-- condition for the strobe
+drop the ADC strobe
+end if;
+end if;
+if (bit_cnt = -1) then ADCstb_int <= '0';
+-- ADCrdy = '1' -- condition to
+end if;
+-- output channel
+32
+--if (DACstb = '1') then -- start condition
+-- DACrdy <= '1';
+-- bit_cnt_o <= 1;
+-- AUD_DACDAT <= DACDAT(0);
+--elsif (old_BCLK='0' and AUD_BCLK='1'and bit_cnt_o <
+16) then -- each following falling edge
+-- AUD_DACDAT <= DACDAT(bit_cnt_o); -- produce
+DAC serial data bit
+-- bit_cnt_o <= bit_cnt_o + 1;
+--end if;
+--if (...) then -- condition for loading DAC parallel
+register
+transfer
+-- ...;
+--end if;
+if (DACstb = '1') then -- start condition
+--enable_o <= 1;
+--bit_cnt_s <= 0;
+DACDAT_int <= DACDAT;
+end if;
+if (old_BCLK='1' and AUD_BCLK='0') then
+if (AUD_DACLRCK = '1') then -- to begin serial
+bit_cnt_s <= 14;
+AUD_DACDAT <= DACDAT_int(15);
+elsif (bit_cnt_s >= 0) then
+AUD_DACDAT <= DACDAT_int(bit_cnt_s);
+bit_cnt_s <= bit_cnt_s - 1;
+end if;
+--if (bit_cnt_s = 0) then
+--DACrdy_int <= '0';
+-- enable_o <= 0;
+--end if;
+end if;
+end if;
+-------------end sync design----------------
+end if;
+end process;
+ADCstb <= ADCstb_int;
+end rtl;
+ S2P Adapter Test Bench:
+LIBRARY ieee;
+USE ieee.std_logic_1164.all;
+ENTITY s2p_adaptor_tst IS
+END s2p_adaptor_tst;
+ARCHITECTURE s2p_adaptor_arch OF s2p_adaptor_tst IS
+-- Signals
+SIGNAL ADCDAT, DACDAT: STD_LOGIC_VECTOR(15 downto 0);
+SIGNAL DACrdy, ADCrdy, DACstb, ADCstb: STD_LOGIC;
+SIGNAL AUD_DACDAT, AUD_ADCDAT, AUD_ADCLRCK, AUD_DACLRCK, AUD_BCLK:
+STD_LOGIC;
+SIGNAL CLOCK_50, RST_N: STD_LOGIC;
+SIGNAL d_vect: std_logic_vector(15 downto 0) := "1001101011110010";
+--signal lrc_cnt: integer := 1;
+--signal b_cnt: integer := -1;
+--signal clk_cnt: integer := 0;
+signal DACDAT_int: std_logic_vector(15 downto 0);
+--signal DACstb_int: std_logic;
+COMPONENT s2p_adaptor
+PORT (
+ADCDAT: OUT STD_LOGIC_VECTOR(15 downto 0);
+DACDAT: IN STD_LOGIC_VECTOR(15 downto 0);
+DACrdy: OUT STD_LOGIC;
+ADCrdy: IN STD_LOGIC;
+DACstb: IN STD_LOGIC;
+ADCstb: OUT STD_LOGIC;
+AUD_DACDAT: OUT STD_LOGIC;
+AUD_ADCDAT: IN STD_LOGIC;
+AUD_ADCLRCK: IN STD_LOGIC;
+AUD_DACLRCK: IN STD_LOGIC;
+AUD_BCLK: IN STD_LOGIC;
+CLOCK_50: IN STD_LOGIC;
+RST_N: IN STD_LOGIC
+);
+END COMPONENT;
+BEGIN
+i1: s2p_adaptor
+PORT MAP (
+ADCDAT => ADCDAT,
+DACDAT => DACDAT,
+DACrdy => DACrdy,
+ADCrdy => ADCrdy,
+DACstb => DACstb,
+ADCstb => ADCstb,
+AUD_DACDAT => AUD_DACDAT,
+34
+AUD_ADCDAT => AUD_ADCDAT,
+AUD_ADCLRCK => AUD_ADCLRCK,
+AUD_DACLRCK => AUD_DACLRCK,
+AUD_BCLK => AUD_BCLK,
+CLOCK_50 => CLOCK_50,
+RST_N => RST_N
+);
+clk_proc: PROCESS -- master clock (50MHz) and reset
+BEGIN
+for i in 1 to 5600 loop
+CLOCK_50 <= '0';
+wait for 10 ns;
+CLOCK_50 <= '1';
+wait for 10 ns;
+if (i = 1) then
+RST_N <= '0';
+elsif (i = 3) then
+RST_N <= '1';
+end if;
+end loop;
+WAIT;
+END PROCESS;
+clk_proc_t: PROCESS -- AUD_BCLK
+BEGIN
+--variable j: integer;
+for i in 1 to 160 loop
+AUD_BCLK <= '0';
+wait for 357 ns;
+AUD_BCLK <= '1';
+wait for 357 ns;
+end loop;
+WAIT;
+END PROCESS;
+lrck_sgnl: PROCESS -- LRC signals
+BEGIN
+AUD_ADCLRCK <= '0';
+AUD_DACLRCK <= '0';
+wait until rising_edge(AUD_BCLK);
+wait until rising_edge(AUD_BCLK);
+for i in 1 to 10 loop
+wait until rising_edge(AUD_BCLK);
+AUD_ADCLRCK <= '1';
+AUD_DACLRCK <= '1';
+wait until rising_edge(AUD_BCLK);
+AUD_ADCLRCK <= '0';
+AUD_DACLRCK <= '0';
+for j in 1 to 25 loop
+wait until rising_edge(AUD_BCLK);
+end loop;
+end loop;
+WAIT;
+END PROCESS;
+input_data: PROCESS
+BEGIN
+DACstb <= '0';
+for i in 1 to 10 loop
+wait until rising_edge(AUD_ADCLRCK);
+for j in 0 to 15 loop
+AUD_ADCDAT <= d_vect(15-j);
+DACDAT(15-j) <= d_vect(15-j);
+wait until rising_edge(AUD_BCLK);
+if (j = 14) then
+wait until rising_edge(CLOCK_50);
+DACstb <= '1';
+wait until rising_edge(CLOCK_50);
+DACstb <= '0';
+end if;
+end loop;
+end loop;
+WAIT;
+END PROCESS;
+--stim: PROCESS
+--BEGIN
+-- DACDAT_int <= ADCDAT;
+-- DACstb_int <= ADCstb;
+-- wait;
+--END PROCESS;
+--DACDAT <= DACDAT_int;
+END s2p_adaptor_arch;
+36
+5. FIR Filter VHDL Code:
+library ieee;
+use ieee.std_logic_1164.all;
+use ieee.numeric_std.all;
+use ieee.std_logic_unsigned.all;
+entity fir is
+port(
+-- Input and output
+ADCDAT: in std_logic_vector(15 downto 0);
+DACDAT: out std_logic_vector(15 downto 0);
+DACrdy: in std_logic;
+ADCrdy: out std_logic;
+DACstb: out std_logic;
+ADCstb: in std_logic;
+-- Control Signals
+CLOCK_50: in std_logic;
+RST_N: in std_logic
+);
+end entity;
+architecture rtl of fir is
+-- Internal Signals
+signal old_ADCstb: std_logic;
+signal tap_cnt: integer range 7 downto -1;
+type tap_shift is array (7 downto 0) of signed (15 downto 0);
+signal x: tap_shift;
+signal accumulator: signed (34 downto 0);
+signal DACstb_int: std_logic;
+-- Coefficients for the Filter
+constant b: tap_shift := (
+to_signed(integer(-1260),16),
+to_signed(integer(7827),16),
+to_signed(integer(12471),16),
+to_signed(integer(16384),16),
+to_signed(integer(16384),16),
+to_signed(integer(12471),16),
+to_signed(integer(7827),16)
+  to_signed(integer(-1260),16));
+begin
+process (CLOCK_50)
+variable i: integer;
+variable lame:integer;
+begin
+if (rising_edge(CLOCK_50)) then -- for each rising edge of clock 50MHz
+if (RST_N = '0') then -- Reset operation
+tap_cnt <= -1;
+DACDAT <= b"0000000000000000";
+--ADCrdy <= '1';
+DACstb_int <= '0';
+--x <= (others => (others => 0));
+for i in 0 to 7 loop
+x(i) <= b"0000000000000000";
+end loop;
+else
+old_ADCstb <= ADCstb;
+if (ADCstb = '1') then -- Start of input
+--ADCrdy <= '0';
+x(7) <= signed(ADCDAT); -- Input data register is
+moved to 7th element of array
+x(6 downto 0) <= x(7 downto 1); -- shifting the
+array of registers
+tap_cnt <= 6;
+--DACstb <= '0';
+--lame:= 0;
+accumulator <= resize(b(7) * signed
+(ADCDAT),35); -- would not take in 32 bits instead of 35bits
+elsif (tap_cnt >= 0) then -- Time multiplexing the
+multiplier
+accumulator <= signed(accumulator + (
+b(tap_cnt)*x(tap_cnt)));
+tap_cnt <= tap_cnt - 1;
+--if (tap_cnt = 6) then
+-- accumulator <= signed(accumulator + (
+b(tap_cnt)*x(tap_cnt)));
+-- -- tap_cnt <= tap_cnt - 1;
+--elsif (tap_cnt = 5) then
+accumulator <= signed(accumulator + (
+b(tap_cnt)*x(tap_cnt)));
+-- tap_cnt <= tap_cnt - 1;
+--elsif (tap_cnt = 4) then
+38
+b(tap_cnt)*x(tap_cnt)));
+b(tap_cnt)*x(tap_cnt)));
+b(tap_cnt)*x(tap_cnt)));
+b(tap_cnt)*x(tap_cnt)));
+b(tap_cnt)*x(tap_cnt)));
+-- accumulator <= signed(accumulator + (
+-- -- tap_cnt <= tap_cnt - 1;
+--elsif (tap_cnt = 3) then
+accumulator <= signed(accumulator + (
+-- -- tap_cnt <= tap_cnt - 1;
+--elsif (tap_cnt = 2) then
+accumulator <= signed(accumulator + (
+-- -- tap_cnt <= tap_cnt - 1;
+--elsif (tap_cnt = 1) then
+accumulator <= signed(accumulator + (
+-- tap_cnt <= tap_cnt - 1;
+if (tap_cnt = 0) then
+--accumulator <= signed(accumulator + (
+DACstb_int <= '1';
+--lame := 1;
+--ADCrdy <= '1';
+DACDAT <=
+std_logic_vector(signed(accumulator(34) & accumulator(32 downto 18))); -- type
+conversion to std_logic_vector
+--tap_cnt <= -1;
+end if;
+end if;
+if (tap_cnt = -1)then
+DACstb_int <= '0';
+--tap_cnt <= 0;
+end if;
+end if;
+end if;
+end process;
+DACstb <= DACstb_int;
+end rtl;
+  FIR Filter Test bench :
+LIBRARY ieee;
+USE ieee.std_logic_1164.all;
+ENTITY fir_vhd_tst IS
+END fir_vhd_tst;
+ARCHITECTURE fir_arch OF fir_vhd_tst IS
+-- constants
+-- signals
+SIGNAL ADCDAT : STD_LOGIC_VECTOR(15 DOWNTO 0);
+SIGNAL ADCrdy : STD_LOGIC;
+SIGNAL ADCstb : STD_LOGIC;
+SIGNAL CLOCK_50 : STD_LOGIC;
+SIGNAL DACDAT : STD_LOGIC_VECTOR(15 DOWNTO 0);
+SIGNAL DACrdy : STD_LOGIC;
+SIGNAL DACstb : STD_LOGIC;
+SIGNAL RST_N : STD_LOGIC;
+COMPONENT fir
+PORT (
+ADCDAT : IN STD_LOGIC_VECTOR(15 DOWNTO 0);
+ADCrdy : OUT STD_LOGIC;
+ADCstb : IN STD_LOGIC;
+CLOCK_50 : IN STD_LOGIC;
+DACDAT : OUT STD_LOGIC_VECTOR(15 DOWNTO 0);
+DACrdy : IN STD_LOGIC;
+DACstb : OUT STD_LOGIC;
+RST_N : IN STD_LOGIC
+);
+END COMPONENT;
+BEGIN
+i1 : fir
+PORT MAP (
+-- list connections between master ports and signals
+ADCDAT => ADCDAT,
+ADCrdy => ADCrdy,
+ADCstb => ADCstb,
+CLOCK_50 => CLOCK_50,
+DACDAT => DACDAT,
+DACrdy => DACrdy,
+DACstb => DACstb,
+RST_N => RST_N
+);
+40
+-- Clock 50 MHz
+clock : PROCESS
+variable i : integer;
+BEGIN
+for i in 1 to 160000 loop
+CLOCK_50 <= '0';
+wait for 10 ns;
+CLOCK_50 <= '1';
+wait for 10 ns;
+end loop;
+WAIT;
+END PROCESS;
+--Reset goes high once and then remain low
+stim : PROCESS
+BEGIN
+RST_N <= '0';
+wait for 45 ns;
+RST_N <= '1';
+WAIT; -- do not repeat once finished
+END PROCESS;
+-- ADCDAT from s2p is manually provided
+ADCdata: PROCESS
+variable p: integer;
+BEGIN
+wait for 200 ns;
+for p in 1 to 8 loop
+ADCDAT <= b"1010101010101010";
+wait for 1000 ns;
+ADCDAT <= b"0101010101010101";
+wait for 1000 ns;
+end loop;
+END PROCESS;
+ADCstrobe: PROCESS
+variable o: integer;
+BEGIN
+ADCstb <= '0';
+wait for 200 ns;
+for o in 1 to 16 loop
+ADCstb <= '1';
+wait for 20 ns;
+ADCstb <= '0';
+wait for 1000 ns;
+end loop;
+  WAIT;
+END PROCESS;
+END fir_arch;
